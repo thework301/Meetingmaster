@@ -299,6 +299,9 @@ export default function LiveMeetingPage({ params }: { params: { id: string } }) 
   const handleEndMeeting = async () => {
     setEnding(true);
     stopRecording();
+    // Wait briefly for MediaRecorder to flush the last audio chunk and
+    // for the final WebSocket transcript message to arrive
+    await new Promise(resolve => setTimeout(resolve, 1500));
     await saveTranscript();
 
     const endedAt = new Date().toISOString();

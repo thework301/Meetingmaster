@@ -60,18 +60,40 @@ export async function POST(
   const full_text = parsed.data.full_text ||
     parsed.data.segments.map(s => `[${s.speaker_label}]: ${s.text_content}`).join('\n');
 
-  // Upsert transcript
-  const { data: transcript, error: transcriptError } = await supabase
+  // Find existing transcript or create new one
+  const { data: existing } = await supabase
     .from('transcripts')
-    .upsert(
-      { meeting_id: params.id, full_text },
-      { onConflict: 'meeting_id' }
-    )
     .select('id')
-    .single();
+    .eq('meeting_id', params.id)
+    .order('created_at', { ascending: false })
+    .limit(1)
+    .maybeSingle();
 
-  if (transcriptError || !transcript) {
-    return NextResponse.json({ error: 'Failed to save transcript' }, { status: 500 });
+  let transcript: { id: string } | null = null;
+
+  if (existing) {
+    // Update existing transcript
+    const { data: updated, error: updateError } = await supabase
+      .from('transcripts')
+      .update({ full_text })
+      .eq('id', existing.id)
+      .select('id')
+      .single();
+    if (updateError || !updated) {
+      return NextResponse.json({ error: 'Failed to update transcript' }, { status: 500 });
+    }
+    transcript = updated;
+  } else {
+    // Insert new transcript
+    const { data: inserted, error: insertError } = await supabase
+      .from('transcripts')
+      .insert({ meeting_id: params.id, full_text })
+      .select('id')
+      .single();
+    if (insertError || !inserted) {
+      return NextResponse.json({ error: 'Failed to save transcript' }, { status: 500 });
+    }
+    transcript = inserted;
   }
 
   // Delete existing segments and re-insert
