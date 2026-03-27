@@ -83,11 +83,17 @@ export default function LiveMeetingPage({ params }: { params: { id: string } }) 
     return () => window.removeEventListener('beforeunload', handler);
   }, []);
 
+  const [loadError, setLoadError] = useState<string | null>(null);
+
   // Load meeting data
   useEffect(() => {
     async function loadMeeting() {
       const res = await fetch(`/api/meetings/${params.id}`);
-      if (!res.ok) { router.push('/dashboard'); return; }
+      if (!res.ok) {
+        const text = await res.text();
+        setLoadError(`Failed to load meeting (${res.status}): ${text}`);
+        return;
+      }
       const { meeting: m } = await res.json();
 
       setMeeting({ id: m.id, title: m.title, company_id: m.company_id });
@@ -338,6 +344,20 @@ export default function LiveMeetingPage({ params }: { params: { id: string } }) 
   const agendaProgress = agendaItems.length > 0
     ? Math.round((agendaItems.filter(a => a.completed).length / agendaItems.length) * 100)
     : 0;
+
+  if (loadError) {
+    return (
+      <div className="h-screen flex items-center justify-center bg-slate-950 text-white p-8">
+        <div className="max-w-lg text-center">
+          <p className="text-red-400 font-semibold text-lg mb-2">Could not load meeting</p>
+          <p className="text-slate-400 text-sm break-all">{loadError}</p>
+          <button onClick={() => router.push('/dashboard')} className="mt-6 px-4 py-2 bg-slate-800 rounded text-sm hover:bg-slate-700">
+            Back to Dashboard
+          </button>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="h-screen flex flex-col bg-slate-950 text-white overflow-hidden">
