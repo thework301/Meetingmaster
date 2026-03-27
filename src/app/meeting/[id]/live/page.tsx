@@ -63,6 +63,10 @@ export default function LiveMeetingPage({ params }: { params: { id: string } }) 
   const [deepgramKey, setDeepgramKey] = useState<string | null>(null);
   const [transcriptId, setTranscriptId] = useState<string | null>(null);
   const [recordingError, setRecordingError] = useState<string | null>(null);
+  const [showRollCall, setShowRollCall] = useState(false);
+  const [listeningFor, setListeningFor] = useState<{ attendeeId: string; name: string } | null>(null);
+  const [speakerMap, setSpeakerMap] = useState<Record<string, string>>({}); // label → name
+  const seenSpeakers = useRef<Set<string>>(new Set());
 
   const wsRef = useRef<WebSocket | null>(null);
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
@@ -174,6 +178,7 @@ export default function LiveMeetingPage({ params }: { params: { id: string } }) 
 
       ws.onopen = () => {
         setIsRecording(true);
+        setShowRollCall(true); // Show roll-call panel
         const options: MediaRecorderOptions = mimeType ? { mimeType } : {};
         const mediaRecorder = new MediaRecorder(stream, options);
         mediaRecorderRef.current = mediaRecorder;
@@ -184,7 +189,7 @@ export default function LiveMeetingPage({ params }: { params: { id: string } }) 
           }
         };
 
-        mediaRecorder.start(250); // Send chunks every 250ms
+        mediaRecorder.start(250);
       };
 
       ws.onerror = () => {
@@ -222,16 +227,44 @@ export default function LiveMeetingPage({ params }: { params: { id: string } }) 
           text_content: group.words.map((w: { word: string }) => w.word).join(' '),
         }));
 
-        setSegments(prev => [...prev, ...newSegments]);
+        // Apply known speaker names from roll-call map
+        setSegments(prev => {
+          const currentMap = speakerMap;
+          const enriched = newSegments.map(seg => ({
+            ...seg,
+            speaker_name: currentMap[seg.speaker_label] ?? null,
+          }));
 
-        // Unknown speaker detection: show alert once per unknown speaker (not stacked)
-        const firstUnnamed = newSegments.find(seg => !seg.speaker_name);
-        if (firstUnnamed && !unknownTimerRef.current) {
-          unknownTimerRef.current = setTimeout(() => {
-            setUnknownSpeakerAlert(firstUnnamed.speaker_label);
-            unknownTimerRef.current = null;
-          }, 10000);
-        }
+          // If in roll-call mode, assign the first new speaker to the waiting attendee
+          setListeningFor(prev2 => {
+            if (prev2) {
+              const newLabel = enriched.find(s => !seenSpeakers.current.has(s.speaker_label));
+              if (newLabel) {
+                seenSpeakers.current.add(newLabel.speaker_label);
+                setSpeakerMap(m => ({ ...m, [newLabel.speaker_label]: prev2.name }));
+                return null; // clear listening state
+              }
+            }
+            // Track all new speakers
+            enriched.forEach(s => seenSpeakers.current.add(s.speaker_label));
+            return prev2;
+          });
+
+          // Show alert for first-time unknown speakers immediately
+          enriched.forEach(seg => {
+            if (!seenSpeakers.current.has(seg.speaker_label) && !speakerMap[seg.speaker_label]) {
+              seenSpeakers.current.add(seg.speaker_label);
+              if (!unknownTimerRef.current) {
+                unknownTimerRef.current = setTimeout(() => {
+                  setUnknownSpeakerAlert(seg.speaker_label);
+                  unknownTimerRef.current = null;
+                }, 3000);
+              }
+            }
+          });
+
+          return [...prev, ...enriched];
+        });
       };
 
       ws.onclose = () => setIsRecording(false);
@@ -271,23 +304,43 @@ export default function LiveMeetingPage({ params }: { params: { id: string } }) 
     }
   }, [segments, params.id]);
 
-  const handleAssignName = async () => {
-    if (!assignNameModal || !assignedName.trim() || !transcriptId) return;
+  const handleAssignName = async (nameOverride?: string) => {
+    if (!assignNameModal) return;
+    const name = (nameOverride ?? assignedName).trim();
+    if (!name) return;
 
-    await fetch(`/api/meetings/${params.id}/transcript`, {
-      method: 'PUT',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        speaker_label: assignNameModal.speakerLabel,
-        speaker_name: assignedName,
-        transcript_id: transcriptId,
-      }),
-    });
+    // Save transcript now if not yet saved, so we have a transcript_id
+    let tid = transcriptId;
+    if (!tid && segments.length > 0) {
+      const res = await fetch(`/api/meetings/${params.id}/transcript`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ segments }),
+      });
+      if (res.ok) {
+        const d = await res.json();
+        tid = d.transcript_id;
+        setTranscriptId(tid);
+      }
+    }
 
-    // Update local segments
+    if (tid) {
+      await fetch(`/api/meetings/${params.id}/transcript`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          speaker_label: assignNameModal.speakerLabel,
+          speaker_name: name,
+          transcript_id: tid,
+        }),
+      });
+    }
+
+    // Update speaker map + all segments with that label
+    setSpeakerMap(m => ({ ...m, [assignNameModal.speakerLabel]: name }));
     setSegments(prev =>
       prev.map(s =>
-        s.speaker_label === assignNameModal.speakerLabel ? { ...s, speaker_name: assignedName } : s
+        s.speaker_label === assignNameModal.speakerLabel ? { ...s, speaker_name: name } : s
       )
     );
 
@@ -422,6 +475,43 @@ export default function LiveMeetingPage({ params }: { params: { id: string } }) 
           </Button>
         </div>
       </div>
+
+      {/* Roll-call banner */}
+      {showRollCall && isRecording && (
+        <div className="bg-blue-900/70 border-b border-blue-700 px-4 py-2 shrink-0">
+          <div className="flex items-center justify-between">
+            <div>
+              <p className="text-blue-200 text-xs font-semibold">🎤 Roll call — identify each speaker</p>
+              <p className="text-blue-300 text-xs mt-0.5">Click &quot;Identify&quot; next to an attendee, then they should speak. Their voice will be linked to their name.</p>
+            </div>
+            <button onClick={() => setShowRollCall(false)} className="text-blue-400 hover:text-white ml-4 text-xs underline">
+              Done
+            </button>
+          </div>
+          <div className="flex flex-wrap gap-2 mt-2">
+            {attendees.map(att => {
+              const name = att.users?.full_name || att.guest_name || 'Unknown';
+              const alreadyMapped = Object.values(speakerMap).includes(name);
+              const isListening = listeningFor?.name === name;
+              return (
+                <button
+                  key={att.id}
+                  onClick={() => setListeningFor(alreadyMapped ? null : { attendeeId: att.id, name })}
+                  className={`flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-medium transition-all border ${
+                    alreadyMapped
+                      ? 'bg-green-900/50 border-green-600 text-green-300 cursor-default'
+                      : isListening
+                      ? 'bg-blue-600 border-blue-400 text-white animate-pulse'
+                      : 'bg-slate-800 border-slate-600 text-slate-300 hover:border-blue-500'
+                  }`}
+                >
+                  {alreadyMapped ? '✓' : isListening ? '👂 Listening…' : '🎤 Identify'} {name}
+                </button>
+              );
+            })}
+          </div>
+        </div>
+      )}
 
       {/* Unknown speaker alert */}
       {unknownSpeakerAlert && (
@@ -667,21 +757,47 @@ export default function LiveMeetingPage({ params }: { params: { id: string } }) 
       {assignNameModal && (
         <div className="fixed inset-0 bg-black/70 z-50 flex items-center justify-center p-4">
           <div className="bg-slate-800 rounded-xl p-6 max-w-sm w-full border border-slate-700 space-y-4">
-            <h3 className="font-semibold text-white">Who is {assignNameModal.speakerLabel}?</h3>
+            <h3 className="font-semibold text-white">Who is <span className="text-blue-300">{assignNameModal.speakerLabel}</span>?</h3>
+
+            {/* Quick pick from attendees */}
+            {attendees.length > 0 && (
+              <div>
+                <p className="text-xs text-slate-400 mb-2">Select an attendee:</p>
+                <div className="flex flex-wrap gap-2">
+                  {attendees.map(att => {
+                    const name = att.users?.full_name || att.guest_name || 'Unknown';
+                    return (
+                      <button
+                        key={att.id}
+                        onClick={() => handleAssignName(name)}
+                        className="px-3 py-1.5 bg-slate-700 hover:bg-blue-700 border border-slate-600 hover:border-blue-500 rounded-lg text-sm text-slate-300 hover:text-white transition-colors"
+                      >
+                        {name}
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
+
+            <div className="relative">
+              <div className="absolute inset-0 flex items-center"><div className="w-full border-t border-slate-600" /></div>
+              <div className="relative text-center"><span className="bg-slate-800 px-2 text-xs text-slate-500">or type a name</span></div>
+            </div>
+
             <input
               value={assignedName}
               onChange={e => setAssignedName(e.target.value)}
               className="w-full bg-slate-700 border border-slate-600 rounded-md px-3 py-2 text-white text-sm placeholder-slate-400 focus:outline-none focus:border-blue-500"
-              placeholder="Enter their name"
-              autoFocus
+              placeholder="Type a custom name…"
               onKeyDown={e => e.key === 'Enter' && handleAssignName()}
             />
             <div className="flex gap-3">
               <Button variant="ghost" onClick={() => setAssignNameModal(null)} className="flex-1 text-slate-400">
                 Cancel
               </Button>
-              <Button onClick={handleAssignName} disabled={!assignedName.trim()} className="flex-1">
-                Assign Name
+              <Button onClick={() => handleAssignName()} disabled={!assignedName.trim()} className="flex-1">
+                Assign
               </Button>
             </div>
           </div>

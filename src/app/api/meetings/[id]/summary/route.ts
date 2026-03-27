@@ -191,12 +191,7 @@ ${enrichedTranscript}`;
     const message = await anthropic.messages.create({
       model:      'claude-sonnet-4-6',
       max_tokens: 4096,
-      messages: [
-        {
-          role:    'user',
-          content: userPrompt,
-        },
-      ],
+      messages: [{ role: 'user', content: userPrompt }],
       system: systemPrompt,
     });
 
@@ -205,17 +200,26 @@ ${enrichedTranscript}`;
       .map((block: { type: string; text: string }) => block.text)
       .join('');
 
-    // Strip any accidental markdown code fences
+    // Strip markdown code fences if Claude wraps the JSON
     const cleaned = rawText
-      .replace(/^```(?:json)?\s*/i, '')
-      .replace(/\s*```$/i, '')
+      .replace(/^[\s\S]*?```(?:json)?\s*/i, (m) => m.includes('```') ? '' : m)
+      .replace(/\s*```[\s\S]*$/i, '')
       .trim();
 
-    parsedAI = JSON.parse(cleaned) as MeetingSummaryResponse;
-  } catch (err) {
-    console.error('[summary/route] Claude API or parse error:', err);
+    // Find JSON object boundaries in case of extra text
+    const jsonStart = cleaned.indexOf('{');
+    const jsonEnd   = cleaned.lastIndexOf('}');
+    if (jsonStart === -1 || jsonEnd === -1) {
+      console.error('[summary/route] No JSON found in Claude response:', rawText.slice(0, 500));
+      return NextResponse.json({ error: 'AI returned an unexpected format. Please try again.' }, { status: 502 });
+    }
+
+    parsedAI = JSON.parse(cleaned.slice(jsonStart, jsonEnd + 1)) as MeetingSummaryResponse;
+  } catch (err: unknown) {
+    const msg = err instanceof Error ? err.message : String(err);
+    console.error('[summary/route] Claude API or parse error:', msg);
     return NextResponse.json(
-      { error: 'Failed to generate AI summary. Please try again.' },
+      { error: `Failed to generate AI summary: ${msg}` },
       { status: 502 }
     );
   }
