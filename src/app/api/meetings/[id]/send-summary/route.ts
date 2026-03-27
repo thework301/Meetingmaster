@@ -158,7 +158,7 @@ export async function POST(
       meetingTitle:     meeting.title,
       date:             meetingDate,
       summary:          summaryText,
-      actionItems:      isAbsent ? formattedActionItems : allFormattedActionItems,
+      actionItems:      allFormattedActionItems,
       myActionItems:    formattedActionItems,
       absentee:         isAbsent,
     });

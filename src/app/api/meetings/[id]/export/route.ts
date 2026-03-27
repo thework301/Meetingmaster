@@ -122,11 +122,16 @@ export async function GET(
       .order('created_at', { ascending: false })
       .limit(1)
       .maybeSingle(),
-    supabase
-      .from('speaker_segments')
-      .select('speaker_label, speaker_name, start_time_seconds, text_content')
-      .order('start_time_seconds', { ascending: true }),
   ]);
+
+  // Fetch speaker segments filtered to this meeting's transcript only
+  const { data: speakerSegments } = transcript?.id
+    ? await supabase
+        .from('speaker_segments')
+        .select('speaker_label, speaker_name, start_time_seconds, text_content')
+        .eq('transcript_id', transcript.id)
+        .order('start_time_seconds', { ascending: true })
+    : { data: [] };
 
   // ── Parse summary ─────────────────────────────────────────────────────────
   let parsedSummary: {

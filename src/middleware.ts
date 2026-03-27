@@ -51,10 +51,12 @@ export async function middleware(request: NextRequest) {
     return NextResponse.redirect(loginUrl);
   }
 
-  // Check session timeout (8 hours)
-  const sessionCreated = new Date(session.user.last_sign_in_at || 0);
-  const hoursSinceLogin = (Date.now() - sessionCreated.getTime()) / (1000 * 60 * 60);
-  if (hoursSinceLogin > SESSION_TIMEOUT_HOURS) {
+  // Check session timeout (8 hours since last token refresh/activity)
+  const lastActivity = new Date(
+    session.expires_at ? (session.expires_at - 3600) * 1000 : session.user.last_sign_in_at || 0
+  );
+  const hoursSinceActivity = (Date.now() - lastActivity.getTime()) / (1000 * 60 * 60);
+  if (hoursSinceActivity > SESSION_TIMEOUT_HOURS) {
     await supabase.auth.signOut();
     const loginUrl = new URL('/login', request.url);
     loginUrl.searchParams.set('reason', 'timeout');

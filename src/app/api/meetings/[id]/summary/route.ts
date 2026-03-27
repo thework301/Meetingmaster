@@ -189,7 +189,7 @@ ${enrichedTranscript}`;
 
   try {
     const message = await anthropic.messages.create({
-      model:      'claude-sonnet-4-20250514',
+      model:      'claude-sonnet-4-6',
       max_tokens: 4096,
       messages: [
         {
@@ -304,7 +304,7 @@ ${enrichedTranscript}`;
   if (meeting.series_id) {
     try {
       const milestoneMessage = await anthropic.messages.create({
-        model:      'claude-sonnet-4-20250514',
+        model:      'claude-sonnet-4-6',
         max_tokens: 50,
         messages: [
           {

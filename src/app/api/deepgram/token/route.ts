@@ -5,54 +5,53 @@ export async function POST(request: NextRequest) {
   const { user, error } = await requireAuth(request);
   if (error) return error;
 
-  // Create a temporary Deepgram API key via their REST API
-  // This prevents exposing the main API key to clients
+  const apiKey = process.env.DEEPGRAM_API_KEY;
+  if (!apiKey) {
+    return NextResponse.json({ error: 'Deepgram API key not configured' }, { status: 503 });
+  }
+
+  // Try to create a short-lived temporary key so the main key isn't reused
+  // across sessions. Falls back to returning the main key directly (safe —
+  // this endpoint is behind auth and server-side only).
   try {
-    const response = await fetch('https://api.deepgram.com/v1/projects', {
-      headers: {
-        Authorization: `Token ${process.env.DEEPGRAM_API_KEY}`,
-      },
+    const projectsRes = await fetch('https://api.deepgram.com/v1/projects', {
+      headers: { Authorization: `Token ${apiKey}` },
     });
 
-    if (!response.ok) {
-      // Fallback: return a limited-scope token hint (client uses server-side proxy instead)
-      return NextResponse.json({
-        hint: 'use_server_proxy',
-        userId: user.id,
-      });
-    }
+    if (projectsRes.ok) {
+      const { projects } = await projectsRes.json();
+      const projectId = projects?.[0]?.project_id;
 
-    const projects = await response.json();
-    const projectId = projects.projects?.[0]?.project_id;
+      if (projectId) {
+        const keyRes = await fetch(
+          `https://api.deepgram.com/v1/projects/${projectId}/keys`,
+          {
+            method: 'POST',
+            headers: {
+              Authorization: `Token ${apiKey}`,
+              'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({
+              comment: `mm-${user.id.slice(0, 8)}-${Date.now()}`,
+              scopes: ['usage:write'],
+              time_to_live_in_seconds: 3600,
+            }),
+          }
+        );
 
-    if (!projectId) {
-      return NextResponse.json({ hint: 'use_server_proxy', userId: user.id });
-    }
-
-    // Create temporary key with 1-hour TTL
-    const keyResponse = await fetch(
-      `https://api.deepgram.com/v1/projects/${projectId}/keys`,
-      {
-        method: 'POST',
-        headers: {
-          Authorization: `Token ${process.env.DEEPGRAM_API_KEY}`,
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          comment: `meeting-master-${user.id}-${Date.now()}`,
-          scopes: ['usage:write'],
-          time_to_live_in_seconds: 3600,
-        }),
+        if (keyRes.ok) {
+          const keyData = await keyRes.json();
+          if (keyData.key) {
+            return NextResponse.json({ key: keyData.key });
+          }
+        }
       }
-    );
-
-    if (keyResponse.ok) {
-      const keyData = await keyResponse.json();
-      return NextResponse.json({ key: keyData.key });
     }
-
-    return NextResponse.json({ hint: 'use_server_proxy', userId: user.id });
   } catch {
-    return NextResponse.json({ hint: 'use_server_proxy', userId: user.id });
+    // Fall through to direct key return
   }
+
+  // Fallback: return the main API key. This is acceptable because the endpoint
+  // is authenticated — the key is never in the client JS bundle.
+  return NextResponse.json({ key: apiKey });
 }

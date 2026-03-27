@@ -62,6 +62,7 @@ export default function LiveMeetingPage({ params }: { params: { id: string } }) 
   const [ending, setEnding] = useState(false);
   const [deepgramKey, setDeepgramKey] = useState<string | null>(null);
   const [transcriptId, setTranscriptId] = useState<string | null>(null);
+  const [recordingError, setRecordingError] = useState<string | null>(null);
 
   const wsRef = useRef<WebSocket | null>(null);
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
@@ -150,10 +151,11 @@ export default function LiveMeetingPage({ params }: { params: { id: string } }) 
       // Get Deepgram key
       const tokenRes = await fetch('/api/deepgram/token', { method: 'POST' });
       const tokenData = await tokenRes.json();
-      const apiKey = tokenData.key || process.env.NEXT_PUBLIC_DEEPGRAM_API_KEY;
+      const apiKey = tokenData.key;
 
       if (!apiKey) {
-        alert('Voice transcription is not configured. Please contact your admin.');
+        setRecordingError('Voice transcription is not configured — DEEPGRAM_API_KEY missing. Contact your admin.');
+        stream.getTracks().forEach(t => t.stop());
         return;
       }
 
@@ -209,17 +211,14 @@ export default function LiveMeetingPage({ params }: { params: { id: string } }) 
 
         setSegments(prev => [...prev, ...newSegments]);
 
-        // Unknown speaker detection: after 10 seconds of new speaker, trigger alert
-        newSegments.forEach(seg => {
-          if (!seg.speaker_name) {
-            if (!unknownTimerRef.current) {
-              unknownTimerRef.current = setTimeout(() => {
-                setUnknownSpeakerAlert(seg.speaker_label);
-                unknownTimerRef.current = null;
-              }, 10000);
-            }
-          }
-        });
+        // Unknown speaker detection: show alert once per unknown speaker (not stacked)
+        const firstUnnamed = newSegments.find(seg => !seg.speaker_name);
+        if (firstUnnamed && !unknownTimerRef.current) {
+          unknownTimerRef.current = setTimeout(() => {
+            setUnknownSpeakerAlert(firstUnnamed.speaker_label);
+            unknownTimerRef.current = null;
+          }, 10000);
+        }
       };
 
       ws.onerror = () => setIsRecording(false);
@@ -228,7 +227,9 @@ export default function LiveMeetingPage({ params }: { params: { id: string } }) 
       wsRef.current = ws;
     } catch (err) {
       if (err instanceof DOMException && err.name === 'NotAllowedError') {
-        alert('Microphone access was denied. Please allow microphone access to use voice transcription.');
+        setRecordingError('Microphone access denied. Please allow microphone access in your browser settings and try again.');
+      } else {
+        setRecordingError('Failed to start recording. Please check your microphone and try again.');
       }
     }
   }, []);
@@ -361,6 +362,13 @@ export default function LiveMeetingPage({ params }: { params: { id: string } }) 
 
   return (
     <div className="h-screen flex flex-col bg-slate-950 text-white overflow-hidden">
+      {/* Recording error banner */}
+      {recordingError && (
+        <div className="bg-red-900/80 text-red-200 text-xs px-4 py-2 flex items-center justify-between shrink-0">
+          <span>{recordingError}</span>
+          <button onClick={() => setRecordingError(null)} className="ml-4 text-red-300 hover:text-white">✕</button>
+        </div>
+      )}
       {/* Dark topbar */}
       <div className="h-14 bg-slate-900 border-b border-slate-800 flex items-center justify-between px-4 shrink-0">
         <div className="flex items-center gap-3">
