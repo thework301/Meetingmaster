@@ -141,9 +141,9 @@ export default function LiveMeetingPage({ params }: { params: { id: string } }) 
       const stream = await navigator.mediaDevices.getUserMedia({
         audio: {
           channelCount: 1,
-          sampleRate: 16000,
           echoCancellation: true,
           noiseSuppression: true,
+          autoGainControl: true,
         },
       });
       streamRef.current = stream;
@@ -159,15 +159,23 @@ export default function LiveMeetingPage({ params }: { params: { id: string } }) 
         return;
       }
 
-      // Connect to Deepgram
+      // Pick best supported mimeType
+      const mimeType = MediaRecorder.isTypeSupported('audio/webm;codecs=opus')
+        ? 'audio/webm;codecs=opus'
+        : MediaRecorder.isTypeSupported('audio/webm')
+        ? 'audio/webm'
+        : '';
+
+      // Connect to Deepgram — use webm/opus format which browsers natively produce
       const ws = new WebSocket(
-        `wss://api.deepgram.com/v1/listen?diarize=true&punctuate=true&smart_format=true&encoding=linear16&sample_rate=16000&channels=1`,
+        `wss://api.deepgram.com/v1/listen?model=nova-2&diarize=true&punctuate=true&smart_format=true`,
         ['token', apiKey]
       );
 
       ws.onopen = () => {
         setIsRecording(true);
-        const mediaRecorder = new MediaRecorder(stream, { mimeType: 'audio/webm' });
+        const options: MediaRecorderOptions = mimeType ? { mimeType } : {};
+        const mediaRecorder = new MediaRecorder(stream, options);
         mediaRecorderRef.current = mediaRecorder;
 
         mediaRecorder.ondataavailable = (e) => {
@@ -177,6 +185,11 @@ export default function LiveMeetingPage({ params }: { params: { id: string } }) 
         };
 
         mediaRecorder.start(250); // Send chunks every 250ms
+      };
+
+      ws.onerror = () => {
+        setRecordingError('Failed to connect to transcription service. Check your Deepgram API key.');
+        setIsRecording(false);
       };
 
       ws.onmessage = (event) => {
@@ -221,7 +234,6 @@ export default function LiveMeetingPage({ params }: { params: { id: string } }) 
         }
       };
 
-      ws.onerror = () => setIsRecording(false);
       ws.onclose = () => setIsRecording(false);
 
       wsRef.current = ws;
