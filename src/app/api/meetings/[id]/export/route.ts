@@ -92,7 +92,6 @@ export async function GET(
     { data: actionItems },
     { data: agendaItems },
     { data: transcript },
-    { data: speakerSegments },
   ] = await Promise.all([
     supabase
       .from('meeting_attendees')
