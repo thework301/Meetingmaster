@@ -23,7 +23,7 @@ export async function GET(
     .from('meetings')
     .select(`
       *,
-      agenda_items(* ORDER BY position_order ASC),
+      agenda_items(*),
       meeting_attendees(
         *,
         users(id, full_name, email, avatar_url)
@@ -38,12 +38,17 @@ export async function GET(
     .single();
 
   if (fetchError || !meeting) {
-    return NextResponse.json({ error: 'Meeting not found' }, { status: 404 });
+    return NextResponse.json({ error: 'Meeting not found', detail: fetchError?.message }, { status: 404 });
   }
 
   // Ensure user is in same company
   if (meeting.company_id !== user.company_id) {
     return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
+  }
+
+  // Sort agenda items by position_order
+  if (meeting.agenda_items) {
+    meeting.agenda_items.sort((a: { position_order: number }, b: { position_order: number }) => a.position_order - b.position_order);
   }
 
   return NextResponse.json({ meeting });
